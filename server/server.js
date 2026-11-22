@@ -1,7 +1,19 @@
 import express from "express";
 import cors from "cors";
-import { getAllBooks, getBookById } from "./booksStore.js";
-import { parsePositiveIntId, validateQueryParams } from "./validate.js";
+import {
+  getAllBooks,
+  getBookById,
+  isDuplicateBook,
+  createBook,
+  replaceBook,
+  deleteBook,
+} from "./booksStore.js";
+import {
+  parsePositiveIntId,
+  validateCompleteBook,
+  validatePatchAndMerge,
+  validateQueryParams,
+} from "./validate.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -110,6 +122,117 @@ app.get("/api/books/:id", async (req, res) => {
   }
 
   return res.status(200).json(book);
+});
+
+// POST /api/books
+app.post("/api/books", async (req, res) => {
+  const { error, value } = validateCompleteBook(req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const duplicate = await isDuplicateBook(value.title, value.author);
+  if (duplicate) {
+    return res
+      .status(409)
+      .json({ error: "A book with the same title and author already exists" });
+  }
+
+  const created = await createBook(value);
+  return res
+    .status(201)
+    .set("Location", `/api/books/${created.id}`)
+    .json(created);
+});
+
+// PUT /api/books/:id
+app.put("/api/books/:id", async (req, res) => {
+  const id = parsePositiveIntId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ error: "Book id must be a positive integer" });
+  }
+
+  const { error, value } = validateCompleteBook(req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const existing = await getBookById(id);
+  if (!existing) {
+    return res.status(404).json({ error: "Book not found" });
+  }
+
+  const duplicate = await isDuplicateBook(value.title, value.author, id);
+  if (duplicate) {
+    return res
+      .status(409)
+      .json({ error: "Another book with the same title and author already exists" });
+  }
+
+  const updated = await replaceBook(id, value);
+  return res.status(200).json(updated);
+});
+
+// PATCH /api/books/:id
+app.patch("/api/books/:id", async (req, res) => {
+  const id = parsePositiveIntId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ error: "Book id must be a positive integer" });
+  }
+
+  const existing = await getBookById(id);
+  if (!existing) {
+    return res.status(404).json({ error: "Book not found" });
+  }
+
+  const { error, value } = validatePatchAndMerge(existing, req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const duplicate = await isDuplicateBook(value.title, value.author, id);
+  if (duplicate) {
+    return res
+      .status(409)
+      .json({ error: "Another book with the same title and author already exists" });
+  }
+
+  const updated = await replaceBook(id, value);
+  return res.status(200).json(updated);
+});
+
+// DELETE /api/books/:id
+app.delete("/api/books/:id", async (req, res) => {
+  const id = parsePositiveIntId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ error: "Book id must be a positive integer" });
+  }
+
+  const deleted = await deleteBook(id);
+  if (!deleted) {
+    return res.status(404).json({ error: "Book not found" });
+  }
+
+  return res.status(204).end();
+});
+
+// Deliberate crash route for testing async error middleware
+app.get("/api/crash", async (req, res) => {
+  throw new Error("Simulated async crash");
+});
+
+// 404 fallback for unmatched /api routes (Express 5 compliant)
+app.use("/api", (req, res) => {
+  return res.status(404).json({ error: "Not found" });
+});
+
+// 4-parameter global error handler
+app.use((err, req, res, next) => {
+  console.error("Unhandled server error:", err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  return res.status(500).json({ error: "Something went wrong" });
 });
 
 app.listen(PORT, () => {
